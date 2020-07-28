@@ -1,0 +1,249 @@
+#!/bin/sh
+
+check_os_release() {
+    grep -q -i -s "$1" /etc/os-release
+}
+
+[ -z $GETOPT ] && GETOPT=getopt
+if ($GETOPT --version | grep -q -i -s "util-linux"); then
+    gnu_getopt=true
+else
+    gnu_getopt=false
+fi
+
+CATEGORIES=
+VERBOSE_MODE=false
+if $gnu_getopt; then
+    TEMPOPTS=$($GETOPT -o bghk:psv --long bedwars,general,help,key:,pit,skywars,verbose -n hypixel-stats -- "$@")
+    [ $? != 0 ] && exit 1
+    eval set -- "$TEMPOPTS"
+
+    while true; do
+	case "$1" in
+	    -b | --bedwars)
+		CATEGORIES="$CATEGORIES bedwars"
+		shift
+		;;
+	    -g | --general)
+		CATEGORIES="$CATEGORIES general"
+		shift
+		;;
+	    -h | --help)
+		echo "hypixel-stats -- Shows a player's stats for various games"
+		echo "                 the Hypixel network"
+		echo
+		echo "Usage: hypixel-stats [-k KEY] [OPTIONS] player..."
+		echo "Options:"
+		echo "  -b, --bedwars               Show a player's Bedwars stats"
+		echo "  -g, --general               Show a player's general stats"
+		echo "  -h, --help                  Show this help text and exit"
+		echo "  -k KEY, --key=KEY           Set the Hypixel API key to KEY"
+		echo "  -p, --pit                   Show a player's Pit stats"
+		echo "  -s, --skywars               Show a player's Skywars stats"
+		echo "  -v, --verbose               Verbose mode; show extra stats"
+		echo
+		echo "By default, the -g option is used, unless one or more of the"
+		echo "other stats options are specified. To show general stats in"
+		echo "this case, you must explicitly pass the -g option."
+		echo
+		exit 0
+		;;
+	    -k | --key)
+		KEY="$2"
+		echo "$KEY" > .hypixel-api-key
+		shift 2
+		;;
+	    -p | --pit)
+		CATEGORIES="$CATEGORIES pit"
+		shift
+		;;
+	    -s | --skywars)
+		CATEGORIES="$CATEGORIES skywars"
+		shift
+		;;
+	    -v | --verbose)
+		VERBOSE_MODE=true
+		shift
+		;;
+	    --)
+		shift
+		break
+		;;
+	    *)
+		break
+		;;
+	esac
+    done
+
+    unset TEMPOPTS
+else
+    while getopts ":bghk:psv" opt; do
+	case "$opt" in
+	    b)
+		CATEGORIES="$CATEGORIES bedwars"
+		;;
+	    g)
+		CATEGORIES="$CATEGORIES general"
+		;;
+	    h)
+	        echo "hypixel-stats -- Shows a player's stats for various games"
+		echo "                 the Hypixel network"
+		echo
+		echo "Usage: hypixel-stats [-k KEY] [OPTIONS] player..."
+		echo "Options:"
+		echo "  -b                          Show a player's Bedwars stats"
+		echo "  -g                          Show a player's general stats"
+		echo "  -h                          Show this help text and exit"
+		echo "  -k KEY                      Set the Hypixel API key to KEY"
+		echo "  -p                          Show a player's Pit stats"
+		echo "  -s                          Show a player's Skywars stats"
+		echo "  -v                          Verbose mode; show extra stats"
+		echo
+		echo "By default, the -g option is used, unless one or more of the"
+		echo "other stats options are specified. To show general stats in"
+		echo "this case, you must explicitly pass the -g option."
+		echo
+		exit 0
+		;;
+	    k)
+		KEY="$OPTARG"
+		echo "$KEY" > .hypixel-api-key
+		;;
+	    p)
+		CATEGORIES="$CATEGORIES pit"
+		;;
+	    s)
+		CATEGORIES="$CATEGORIES skywars"
+		;;
+	    v)
+		VERBOSE_MODE=true
+		;;
+	    \?)
+		echo "Invalid option: $OPTARG" >&2
+		echo "Usage: hypixel-stats [-k KEY] [OPTIONS] player..." >&2
+		echo "Run this script with -h for help." >&2
+		exit 1
+		;;
+	    :)
+		echo "Option $OPTARG requires an argument" >&2
+		echo "Usage: hypixel-stats [-k KEY] [OPTIONS] player..." >&2
+		echo "Run this script with -h for help." >&2
+		exit 1
+		;;
+	esac
+    done
+    shift $((OPTIND - 1))
+fi
+
+[ -z "$CATEGORIES" ] && CATEGORIES=general
+if [ -z "$KEY" ]; then
+    if [ -f ".hypixel-api-key" -o -L ".hypixel-api-key" ]; then
+	KEY=$(cat .hypixel-api-key)
+    else
+	echo "No Hypixel API key found. Specify one on the" >&2
+	echo "command line with '-k KEY', or set the KEY" >&2
+	echo "environment variable. The key used will be" >&2
+	echo "stored so that it doesn't need to be specified" >&2
+	echo "the next time you run this program." >&2
+	echo >&2
+	exit 1
+    fi
+fi
+
+if [ -z "$1" ]; then
+    echo "Usage: hypixel-stats [-k KEY] [OPTIONS] player..." >&2
+    echo "Run this script with -h for help." >&2
+    exit 1
+fi
+
+for user in "$@"; do
+    echo "Getting stats for $user ..."
+    raw=$(echo $(wget "https://api.hypixel.net/player?name=$user&key=$KEY" -q -O -))
+    if [ -z "$raw" ]; then
+	echo "Couldn't connect or invalid API key!" >&2
+	continue
+    fi
+
+    if (echo "$CATEGORIES" | grep -q -s "general"); then
+	gen_level=$(echo "$raw" | grep -E -o '"networkExp":([0-9]+)' | grep -E -o "[0-9]+")
+	if [ -n "$gen_level" ]; then
+	    gen_level=$(echo "$(echo "(sqrt(${gen_level}+15312.5)-125/sqrt(2))/(25*sqrt(2))" | bc -l)/1" | bc)
+	    echo "Network Level: $gen_level"
+	fi
+	gen_rank=$(echo "$raw" | grep -E -o '"newPackageRank":"([A-Z_]+)"' | grep -E -o '"[A-Z_]+"' | cut -d '"' -f 2)
+	if [ "x$gen_rank" != xMVP_PLUS ]; then
+	    gen_rank=$(echo "$gen_rank" | sed -e "s,_PLUS,+,g")
+	    echo "Rank: $gen_rank"
+	elif [ -n "$gen_rank" ]; then
+	    gen_rank=$(echo "$raw" | grep -E -o '"monthlyPackageRank":"([A-Z_]+)"' | grep -E -o '"[A-Z_]+"' | cut -d '"' -f 2)
+	    if [ "x$gen_rank" = xNONE -o -z "$gen_rank" ]; then
+		echo "Rank: MVP+"
+	    else
+		echo "Rank: MVP++"
+	    fi
+	else
+	    echo "Rank: NONE"
+	fi
+	gen_karma=$(echo "$raw" | grep -E -o '"karma":([0-9]+)' | grep -E -o "[0-9]+")
+	[ -n "$gen_karma" ] && echo "Karma: $gen_karma"
+    fi
+
+    if (echo "$CATEGORIES" | grep -q -s "bedwars"); then
+	bw_level=$(echo "$raw" | grep -E -o '"bedwars_level":([0-9]+)' | grep -E -o "[0-9]+")
+	[ -n "$bw_level" ] && echo "Bedwars Level: $bw_level"
+	bw_finals=$(echo "$raw" | grep -E -o '"final_kills_bedwars":([0-9]+)' | grep -E -o "[0-9]+")
+	[ -n "$bw_finals" ] && echo "Bedwars Final Kills: $bw_finals"
+	bw_fdeaths=$(echo "$raw" | grep -E -o '"final_deaths_bedwars":([0-9]+)' | grep -E -o "[0-9]+")
+	if [ -n "$bw_finals" -a -n "$bw_fdeaths" ]; then
+	    $VERBOSE_MODE && echo "Bedwars Final Deaths: $bw_fdeaths"
+	    bw_fkdr=$(echo "$bw_finals/$bw_fdeaths" | bc -l | cut -c 1-5)
+	    echo "Bedwars FKDR: $bw_fkdr"
+	fi
+	bw_beds=$(echo "$raw" | grep -E -o '"beds_broken_bedwars":([0-9]+)' | grep -E -o "[0-9]+")
+	[ -n "$bw_beds" ] && echo "Bedwars Beds Destroyed: $bw_beds"
+
+	if $VERBOSE_MODE; then
+	    bw_kills=$(echo "$raw" | grep -E -o '"kills_bedwars":([0-9]+)' | grep -E -o "[0-9]+")
+	    [ -n "$bw_kills" ] && echo "Bedwars Kills: $bw_kills"
+	    bw_deaths=$(echo "$raw" | grep -E -o '"deaths_bedwars":([0-9]+)' | grep -E -o "[0-9]+")
+	    if [ -n "$bw_deaths" ]; then
+		echo "Bedwars Deaths: $bw_deaths"
+		bw_kdr=$(echo "$bw_kills/$bw_deaths" | bc -l | cut -c 1-5)
+		echo "Bedwars KDR: $bw_kdr"
+	    fi
+	    bw_winstreak=$(echo "$raw" | grep -E -o '"Bedwars":.*?"winstreak":([0-9]+)' | grep -E -o "[0-9]+$")
+	    [ -n "$bw_winstreak" ] && echo "Bedwars Winstreak: $bw_winstreak"
+	fi
+    fi
+
+    if (echo "$CATEGORIES" | grep -q -s "pit"); then
+	pit_kills=$(echo "$raw" | grep -E -o '"pit_stats_ptl":.*?"kills":([0-9]+)' | grep -E -o "[0-9]+$")
+	[ -n "$pit_kills" ] && echo "Pit Kills: $pit_kills"
+	pit_assists=$(echo "$raw" | grep -E -o '"pit_stats_ptl":.*?"assists":([0-9]+)' | grep -E -o "[0-9]+$")
+	[ -n "$pit_assists" ] && echo "Pit Assists: $pit_assists"
+	pit_deaths=$(echo "$raw" | grep -E -o '"pit_stats_ptl":.*?"deaths":([0-9]+)' | grep -E -o "[0-9]+$")
+	if [ -n "$pit_kills" -a -n "$pit_deaths" ]; then
+	    $VERBOSE_MODE && echo "Pit Deaths: $pit_deaths"
+	    pit_kdr=$(echo "$pit_kills/$pit_deaths" | bc -l | cut -c 1-5)
+	    echo "Pit KDR: $pit_kdr"
+	    pit_ka=$(($pit_kills + $pit_assists))
+	    pit_kadr=$(echo "$pit_ka/$pit_deaths" | bc -l | cut -c 1-5)
+	    echo "Pit KADR: $pit_kadr"
+	fi
+	pit_dmg_dealt=$(echo "$raw" | grep -E -o '"pit_stats_ptl":.*?"damage_dealt":([0-9]+)' | grep -E -o "[0-9]+$")
+	[ -n "$pit_dmg_dealt" ] && echo "Pit Damage Dealt: $pit_dmg_dealt"
+    fi
+
+    if (echo "$CATEGORIES" | grep -q -s "skywars"); then
+	sw_level=$(echo "$raw" | grep -E -o '"levelFormatted":"(.*?)"' | tr -d -c 0-9)
+	[ -n "$sw_level" ] && echo "Skywars Level: $sw_level"
+	sw_kills=$(echo "$raw" | grep -E -o '"SkyWars":.*?"kills":([0-9]+)' | grep -E -o "([0-9]+)$")
+	[ -n "$sw_kills" ] && echo "Skywars Kills: $sw_kills"
+	sw_deaths=$(echo "$raw" | grep -E -o '"SkyWars":.*?"deaths":([0-9]+)' | grep -E -o "([0-9]+)$")
+	if [ -n "$sw_kills" -a -n "$sw_deaths" ]; then
+	    $VERBOSE_MODE && echo "Skywars Deaths: $sw_deaths"
+	    sw_kdr=$(echo "$sw_kills/$sw_deaths" | bc -l | cut -c 1-5)
+	    echo "Skywars KDR: $sw_kdr"
+	fi
+    fi
+done
